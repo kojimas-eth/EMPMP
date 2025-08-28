@@ -91,6 +91,7 @@ bash run_all.sh
 ### 📋 Important Notes
 - The **first value** of each metric represents the **average**
 - In our paper, we **truncate data to one decimal place** (the same operation is also applied to **other models to ensure fairness**)
+- Please multiply the result of MPJPE by 1000 to reproduce the result in the paper.
 
 ## 📚 Citation
 
