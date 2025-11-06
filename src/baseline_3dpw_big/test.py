@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from src.models_dual_inter_traj_big.utils import AverageMeter,predict,Get_RC_Data
-from metrics import VIM, VAM
+from src.baseline_3dpw_big.metrics import VIM, VAM
 from src.models_dual_inter_traj_big.utils import Get_RC_Data,visuaulize
 def random_pred(config, model,iter):
     device=config.device
@@ -344,6 +344,9 @@ def mpjpe_vim_test(config, model, eval_generator,is_mocap,select_vim_frames=[1, 
     
     vim_avg = AverageMeter()
     
+    total_inference_time_ms=0.0
+    total_track_processed =0
+
     loss_list1=[]
     loss_list2=[]
     loss_list3=[]
@@ -362,8 +365,26 @@ def mpjpe_vim_test(config, model, eval_generator,is_mocap,select_vim_frames=[1, 
         h36m_motion_target=torch.tensor(h36m_motion_target,device=device).float()
         if config.rc:
             h36m_motion_input,h36m_motion_target=Get_RC_Data(h36m_motion_input,h36m_motion_target)
+
+        #Start the inference time watch
+        if device.startswith('cuda'):
+            start_event= torch.cuda.Event(enable_timing=True)
+            end_event= torch.cuda.Event(enable_timing= True)    
+            start_event.record()
+
         motion_pred=predict(model,h36m_motion_input,config,h36m_motion_target=h36m_motion_target)
-    
+        
+        #stop inference time
+        if device.startswith('cuda'):
+            end_event.record()
+            torch.cuda.synchronize()
+            inference_time_batch_ms = start_event.elapsed_time(end_event)
+            total_inference_time_ms += inference_time_batch_ms
+            b,p,*_=motion_pred.shape
+            total_track_processed += b*p
+
+        avg_time_per_track_ms = total_inference_time_ms / total_track_processed if total_track_processed > 0 else 0
+
         cal_vim(motion_pred,h36m_motion_target,vim_avg)
         loss1,loss2,loss3=cal_mpjpe(motion_pred,h36m_motion_target,is_mocap=is_mocap,select_frames=select_mpjpe_frames)
         jpe=cal_jpe(motion_pred,h36m_motion_target,is_mocap=is_mocap,select_frames=select_mpjpe_frames)
@@ -391,7 +412,7 @@ def mpjpe_vim_test(config, model, eval_generator,is_mocap,select_vim_frames=[1, 
     
     fde_res=np.array(fde_res)
     fde_res=np.mean(fde_res,axis=0)
-    return mpjpe_res,vim_avg.avg[select_vim_frames]/1.8 if is_mocap else vim_avg.avg[select_vim_frames],jpe_res,ape_res,fde_res
+    return mpjpe_res,vim_avg.avg[select_vim_frames]/1.8 if is_mocap else vim_avg.avg[select_vim_frames],jpe_res,ape_res,fde_res, avg_time_per_track_ms
 
 def vim_test(config, model, eval_generator,dataset="3dpw",return_all=True,select_frames=[1, 3, 7, 9, 13]):    
     device=config.device

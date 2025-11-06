@@ -4,12 +4,12 @@ os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 import json
 import numpy as np
 from src.models_dual_inter_traj.utils import visuaulize,seed_set,get_dct_matrix,gen_velocity,predict,getRandomPermuteOrder,getRandomRotatePoseTransform,getRandomScaleTransform
-from lr import update_lr_multistep
+from src.baseline_h36m_15to15.lr import update_lr_multistep
 from src.baseline_h36m_15to15.config import config
 from src.models_dual_inter_traj.model import siMLPe as Model
 from src.baseline_h36m_15to15.lib.datasets.dataset_mocap import DATA
-from lib.utils.logger import get_logger, print_and_log_info
-from lib.utils.pyt_utils import  ensure_dir
+from src.baseline_h36m_15to15.lib.utils.logger import get_logger, print_and_log_info
+from src.baseline_h36m_15to15.lib.utils.pyt_utils import  ensure_dir
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from src.baseline_h36m_15to15.test import mpjpe_test_regress,regress_pred,mpjpe_vim_test
@@ -225,10 +225,10 @@ while (nb_iter + 1) < config.cos_lr_total_iters:
                     eval_generator_mocap = eval_dataset_mocap.iter_generator(batch_size=config.batch_size)#按顺序遍历一次数据集
                     mpjpe_res_mocap,vim_res_mocap,jpe_res_mocap,ape_res_mocap,fde_res_mocap=mpjpe_vim_test(config, model, eval_generator_mocap,is_mocap=True,select_vim_frames=[1, 3, 7, 9, 14],select_mpjpe_frames=[3,9,15])#得到评估结果
                     
-                    # if mpjpe_res_mocap[0]<min_mpjpe_mocap:#保存最好的模型
-                    #     min_mpjpe_mocap=mpjpe_res_mocap[0]
-                    #     torch.save(model.state_dict(), config.snapshot_dir + '/model-iter-' + str(nb_iter + 1) + '.pth')
-                    #     print("save model")
+                    if mpjpe_res_mocap[0]<min_mpjpe_mocap:#保存最好的模型
+                        min_mpjpe_mocap=mpjpe_res_mocap[0]
+                        torch.save(model.state_dict(), config.snapshot_dir + '/model-iter-' + str(nb_iter + 1) + '.pth')
+                        print("save model")
                     eval_generator_mupots = eval_dataset_mupots.iter_generator(batch_size=config.batch_size)
                     mpjpe_res_mupots,vim_res_mupots,jpe_res_mupots,ape_res_mupots,fde_res_mupots=mpjpe_vim_test(config, model, eval_generator_mupots,is_mocap=False,select_vim_frames=[1, 3, 7, 9, 14],select_mpjpe_frames=[3,9,15])
                     

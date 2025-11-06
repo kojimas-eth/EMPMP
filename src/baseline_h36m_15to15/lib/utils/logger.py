@@ -1,5 +1,5 @@
 import logging
-from lib.utils.pyt_utils import ensure_dir
+from src.baseline_h36m_15to15.lib.utils.pyt_utils import ensure_dir
 
 def print_and_log_info(logger, string):
     logger.info(string)

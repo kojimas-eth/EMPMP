@@ -4,7 +4,7 @@ os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 print('Current working directory：',os.getcwd())
 import json
 from src.models_dual_inter_traj_big.utils import Get_RC_Data,visuaulize,visuaulize_bianhao,seed_set,get_dct_matrix,gen_velocity,predict,update_metric,getRandomPermuteOrder,getRandomRotatePoseTransform
-from lr import update_lr_multistep
+from src.baseline_3dpw_big.lr import update_lr_multistep
 from src.baseline_3dpw_big.config import config
 from src.models_dual_inter_traj_big.model import siMLPe as Model
 from src.baseline_3dpw_big.lib.dataset.dataset_3dpw import get_3dpw_dataloader
@@ -235,10 +235,11 @@ while (nb_iter + 1) < config.cos_lr_total_iters:
                 print("begin test")
                 
                 # vim_3dpw=vim_test(config, model, dataloader_test,dataset="3dpw")
-                mpjpe,vim,jpe,ape,fde=mpjpe_vim_test(config, model, dataloader_test,is_mocap=False,select_vim_frames=[1, 3, 7, 9, 13],select_mpjpe_frames=[7,14,14])
+                mpjpe,vim,jpe,ape,fde,avg_time_ms=mpjpe_vim_test(config, model, dataloader_test,is_mocap=False,select_vim_frames=[1, 3, 7, 9, 13],select_mpjpe_frames=[7,14,14])
                 
                 print(f"iter:{nb_iter},vim:",vim)
                 print(f"iter:{nb_iter},mpjpe:",mpjpe)
+                print(f"iter:{nb_iter},Avg Inference Time: {avg_time_ms:.2f} ms per sample")
                 
                 update_metric(metric_best,"vim",vim,nb_iter)
                 update_metric(metric_best,"mpjpe",mpjpe,nb_iter)

@@ -1,5 +1,5 @@
 import logging
-from lib.utils.pyt_utils import ensure_dir
+from src.baseline_3dpw_big.lib.utils.pyt_utils import ensure_dir
 
 def print_and_log_info(logger, string):
     logger.info(string)
