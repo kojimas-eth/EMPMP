@@ -3,6 +3,8 @@ import os
 import time
 import numpy as np
 import torch
+import json
+
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 print('Current working directory：',os.getcwd())
 import json
@@ -52,6 +54,10 @@ if os.path.exists(expr_dir):
     shutil.rmtree(expr_dir)
 os.makedirs(expr_dir, exist_ok=True)
 
+# --- Define Logging Path ---
+POSE_LOG_FILE = os.path.join(expr_dir, 'pose_log.jsonl')
+print(f"Prediction log will be saved to: {POSE_LOG_FILE}")
+
 # Configuration
 config.rc=args.rc
 config.norm_way=args.norm_way
@@ -88,6 +94,25 @@ idct_m = torch.tensor(idct_m).float().to(config.device).unsqueeze(0)
 config.dct_m=dct_m
 config.idct_m=idct_m
 
+def log_prediction_data(past_poses_np, future_poses_np):
+    """
+    Saves the input and output data to the log file in JSON Lines format.
+    Uses 'a' mode for append and immediate flush to ensure durability.
+    """
+    log_entry = {
+        "timestamp": time.time(),
+        "input_frames": past_poses_np.squeeze(0).tolist(), # Convert NumPy array to nested list
+        "prediction_frames": future_poses_np.squeeze(0).tolist(), # Convert NumPy array to nested list
+    }
+    
+    try:
+        with open(POSE_LOG_FILE, 'a') as f:
+            # Write a single line JSON object followed by a newline
+            json.dump(log_entry, f)
+            f.write('\n')
+    except Exception as e:
+        print(f"Error during log write: {e}")
+
 
 def run_single_inference(latest_16_frames, model, config):
     # 1. Shape and Flatten (Matches the input preparation in your code)
@@ -98,6 +123,7 @@ def run_single_inference(latest_16_frames, model, config):
     # 1. Convert list of T frames to a PyTorch Tensor
     # input_np shape: (T, P, 13, 3)
     input_np = np.array(latest_16_frames) 
+    print("input shape", input_np.shape)
     
     # Flatten the joint data (13*3=39)
     # Shape: (T, P, 39)
@@ -180,7 +206,8 @@ def load_checkpoint(model, model_path, device):
         print(f"ERROR loading checkpoint: {e}")
 
 def generate_rand():
-    random_joints= np.random.rand(16,2,13,3)
+    # random_joints= np.random.rand(16,2,13,3)
+    random_joints=np.random.rand(1,2,13,3)
     return random_joints
 
 
@@ -199,11 +226,30 @@ input_history_length=config.t_his
 past_joints = [] 
 frame_counter = 0
 
-test_input = generate_rand()
-print("test input looks like", np.shape(test_input))
+for i in range(20):
 
-input_joints , output_joints = run_single_inference(test_input,model,config)
-print("Prediction ended", output_joints.shape)
+    #Replace with getting people's pose for that timestep
+    test_input = generate_rand()
+    # print("test input looks like", np.shape(test_input))
 
-motion=torch.cat([input_joints,output_joints],dim=2).cpu().detach().numpy()
-visuaulize(motion,"trial",config.vis_dir,input_len=15,dataset='mupots')
+    if len(past_joints) == input_history_length:
+        past_joints.pop(0)
+    
+    past_joints.append(test_input)
+
+    if len(past_joints) == input_history_length:
+        print("Entering prediction code")
+        input_joints , output_joints = run_single_inference(past_joints,model,config)
+        print("Prediction ended", output_joints.shape)
+
+        motion=torch.cat([input_joints,output_joints],dim=2).cpu().detach().numpy()
+        visuaulize(motion,"trial",config.vis_dir,input_len=15,dataset='mupots')
+
+        # Convert tensors to NumPy arrays for logging
+        past_poses_np = input_joints.cpu().numpy()
+        future_poses_np = output_joints.cpu().numpy()
+
+        # --- LOGGING STEP (Ensures durability) ---
+        log_prediction_data(past_poses_np, future_poses_np)
+    
+    i+=1
