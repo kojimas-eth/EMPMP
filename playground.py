@@ -118,14 +118,20 @@ class PersonHistoryManager:
         for body in zed_body_list:
             # if body.tracking_state != sl.OBJECT_TRACKING_STATE.OK:
             #     continue
+            raw_kp=body.keypoint
 
+            if np.isnan(raw_kp).any() or np.isinf(raw_kp).any():
+                continue
+            
             uid = body.id
             current_frame_ids.add(uid)
 
-            raw_kp=body.keypoint
+
             
             #reorder into right index and add into history
-            zed_to_lsp_indices = [10, 9, 8, 11, 12, 13, 4, 3, 2, 5, 6, 7, 0] 
+            # zed_to_lsp_indices = [10, 9, 8, 11, 12, 13, 4, 3, 2, 5, 6, 7, 0] 
+            zed_to_lsp_indices = [8,11,9,12,10,13,0,2,5,3,4,6,7] 
+
             kp_13 = np.array([raw_kp[x] for x in zed_to_lsp_indices])
             self.buffers[uid].append(kp_13)
 
