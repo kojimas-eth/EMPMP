@@ -117,7 +117,6 @@ def log_prediction_data(past_poses_np, future_poses_np):
 def run_single_inference(latest_16_frames, model, config):
     # 1. Shape and Flatten (Matches the input preparation in your code)
     # Input shape: (16, P,  13, 3) -> target flat shape: (1, P, 16, 39)
-    # TODO: Change the way to get number of people
     num_people = config.n_p
 
     # 1. Convert list of T frames to a PyTorch Tensor
@@ -129,7 +128,7 @@ def run_single_inference(latest_16_frames, model, config):
     # Shape: (T, P, 39)
     input_flat = input_np.reshape(input_history_length, num_people, config.n_joint * 3)
 
-    # CRITICAL RESHAPE: Convert (T, P, D) to model-expected (B=1, P, T, D)
+    #Convert (T, P, D) to model-expected (B=1, P, T, D)
     # 1. Transpose T and P: (P, T, D)
     input_transposed = np.transpose(input_flat, (1, 0, 2))
     
@@ -154,7 +153,7 @@ def run_single_inference(latest_16_frames, model, config):
 
     return h36m_motion_input_3d, future_poses_3d
 
-# 1. Root Correction (RC) Function for Inference ONLY
+# 1. Root Correction (RC) Function for Inference
 def Get_RC_Data_Inference(motion_input):
     """
     Applies Root Correction (RC) and velocity integration to a single sequence.
@@ -206,9 +205,59 @@ def load_checkpoint(model, model_path, device):
         print(f"ERROR loading checkpoint: {e}")
 
 def generate_rand():
+    #Frame - people - joints - 3D coordinate
     # random_joints= np.random.rand(16,2,13,3)
     random_joints=np.random.rand(1,2,13,3)
     return random_joints
+
+def prepare_dynamic_batch(keypoints_list):
+    """
+    Args:
+        keypoints_list: List of numpy arrays, where each is (13, 3)
+                        Length of list = Number of people detected (N)
+    Returns:
+        input_tensor: Torch tensor of shape (Batch, 2, 13, 3)
+    """
+    num_people = len(keypoints_list)
+    
+    # --- Case 0: No one detected ---
+    if num_people == 0:
+        return None
+
+    # --- Case 1: Single Person (Ghost Padding) ---
+    if num_people == 1:
+        real_p = keypoints_list[0] # Shape (13, 3)
+        ghost_p = np.zeros_like(real_p)
+        # Combine to shape (1, 2, 13, 3)
+        batch = np.array([[real_p, ghost_p]])
+        return torch.tensor(batch).float()
+
+    # --- Case 2: Exactly Two People ---
+    if num_people == 2:
+        # Combine to shape (1, 2, 13, 3)
+        batch = np.array([[keypoints_list[0], keypoints_list[1]]])
+        return torch.tensor(batch).float()
+
+    # --- Case 3: More than 2 (Chunking Strategy) ---
+    # We will group them into pairs: (P1,P2), (P3,P4), ...
+    batch_items = []
+    
+    for i in range(0, num_people, 2):
+        person_a = keypoints_list[i]
+        
+        # Check if there is a partner for this chunk
+        if i + 1 < num_people:
+            person_b = keypoints_list[i+1]
+        else:
+            # Odd number of people? Last person gets a ghost partner
+            person_b = np.zeros_like(person_a)
+            
+        batch_items.append([person_a, person_b])
+        
+    # Stack into final batch
+    # Result shape: (Num_Pairs, 2, 13, 3)
+    final_batch = np.array(batch_items)
+    return torch.tensor(final_batch).float()
 
 
 '''-------------This is the beginning of the main code---------------------'''
@@ -226,16 +275,48 @@ input_history_length=config.t_his
 past_joints = [] 
 frame_counter = 0
 
-for i in range(20):
+'''Loading a pre-recorded JSON file from zed camera'''
+with open('bodies.json','r') as file:
+    data = json.load(file)
 
-    #Replace with getting people's pose for that timestep
-    test_input = generate_rand()
+keypoints_stored = []
+for timestamp, frame_data in data.items():
+    try:
+        body_list = frame_data['body_list']
+
+        for body_data in body_list:
+            keypoints = body_data['keypoint']
+            # indices=[0,2,3,4,5,6,7,8,9,10,11,12,13]
+            zed_to_lsp_indices = [10, 9, 8, 11, 12, 13, 4, 3, 2, 5, 6, 7, 0]
+            keypoints_13 = [keypoints[x] for x in zed_to_lsp_indices]
+            
+            keypoints_stored.append(keypoints_13)
+
+    except KeyError as e:
+        print(f"Key error accessing data : {e}")
+        continue
+# print(json.dumps(data))
+print(len(keypoints_stored))
+
+for i in range(20):
+    # test_input = generate_rand()
+    test_input = np.array(keypoints_stored[i])
+
+    input_tensor = prepare_dynamic_batch(test_input)
+    model_input = input_tensor.to(config.device)
+
+    # ghost = np.copy(test_input)
+
+    # model_input=np.concatenate((test_input,ghost), axis=1)
+
+
+
     # print("test input looks like", np.shape(test_input))
 
     if len(past_joints) == input_history_length:
         past_joints.pop(0)
     
-    past_joints.append(test_input)
+    past_joints.append(model_input)
 
     if len(past_joints) == input_history_length:
         print("Entering prediction code")
