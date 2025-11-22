@@ -57,9 +57,7 @@ if os.path.exists(expr_dir):
     shutil.rmtree(expr_dir)
 os.makedirs(expr_dir, exist_ok=True)
 
-# --- Define Logging Path ---
-POSE_LOG_FILE = os.path.join(expr_dir, 'pose_log.jsonl')
-print(f"Prediction log will be saved to: {POSE_LOG_FILE}")
+
 
 # Configuration
 config.rc=args.rc
@@ -85,7 +83,7 @@ config.motion_mlp.interaction_interval = args.interaction_interval
 config.motion_mlp.hidden_dim = args.hd
 config.snapshot_dir=os.path.join(expr_dir, 'snapshot')
 ensure_dir(config.snapshot_dir)# Create folder
-config.vis_dir=os.path.join(expr_dir, 'vis')
+config.vis_dir=os.path.join(expr_dir, 'multipeople')
 ensure_dir(config.vis_dir)# Create folder
 config.log_file=os.path.join(expr_dir, 'log.txt')
 config.model_pth=args.model_path
@@ -130,7 +128,8 @@ class PersonHistoryManager:
             
             #reorder into right index and add into history
             # zed_to_lsp_indices = [10, 9, 8, 11, 12, 13, 4, 3, 2, 5, 6, 7, 0] 
-            zed_to_lsp_indices = [8,11,9,12,10,13,0,2,5,3,4,6,7] 
+            # zed_to_lsp_indices = [8,11,9,12,10,13,0,2,5,3,4,6,7] 
+            zed_to_lsp_indices = [11, 8, 12, 9, 13, 10, 0, 5, 2, 6, 3, 7, 4]
 
             kp_13 = np.array([raw_kp[x] for x in zed_to_lsp_indices])
             self.buffers[uid].append(kp_13)
@@ -190,8 +189,8 @@ def log_prediction_data(past_poses_np, future_poses_np):
     """
     log_entry = {
         "timestamp": time.time(),
-        "input_frames": past_poses_np.squeeze(0).tolist(), # Convert NumPy array to nested list
-        "prediction_frames": future_poses_np.squeeze(0).tolist(), # Convert NumPy array to nested list
+        "input_frames": past_poses_np.tolist(), # Convert NumPy array to nested list
+        "prediction_frames": future_poses_np.tolist(), # Convert NumPy array to nested list
     }
     
     try:
@@ -247,6 +246,7 @@ def run_live_inference(zed_body_list, model, config):
     valid_ids, valid_trajectories = history_manager.update_and_get_valid_batch(zed_body_list)
 
     num_people = len(valid_ids)
+    print(f"making prediction for {num_people}")
 
     if num_people ==0:
         return None
@@ -277,13 +277,9 @@ def run_live_inference(zed_body_list, model, config):
     # motion_pred is (Num_Pairs, 2, Future_Frames, 39)
     motion_pred = predict(model,model_input,config)
 
-    print("predicted motion", motion_pred)
-
     pred_flat = motion_pred.reshape(-1, motion_pred.shape[2], config.n_joint, 3)
-    
-    print("after flattening", pred_flat)
     pred_flat = pred_flat[:num_people]
-    print("after flattening AND SHORTENING", pred_flat)
+
 
     # model_input is (Num_Pairs, 2, 16, 39)
     # 1. Reshape (39) -> (13, 3)
@@ -439,9 +435,13 @@ frame_counter = 0
 
 history_manager = PersonHistoryManager(history_length=input_history_length)
 
+# --- Define Logging Path ---
+POSE_LOG_FILE = os.path.join(expr_dir, 'pose_log2.jsonl')
+print(f"Prediction log will be saved to: {POSE_LOG_FILE}")
 
-'''Loading a pre-recorded JSON file from zed camera'''
-with open('multibodies.json','r') as file:
+
+# --- Load the Json file ---
+with open('multbodies.json','r') as file:
     data = json.load(file)
 
 processed_frames_store = []
@@ -470,7 +470,6 @@ if len(processed_frames_store) > 0:
 #Main Loop
 for frame_index, frame_bodies in enumerate(processed_frames_store):
 
-    print(f"processing {frame_bodies}")
     inference_results = run_live_inference(frame_bodies,model,config)
     
     #makes sure None is not assigned (when not enough history)
