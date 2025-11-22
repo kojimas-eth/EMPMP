@@ -158,31 +158,46 @@ if __name__ == "__main__":
     
     num_past = past_data.shape[1]
     num_predicted = predicted_data.shape[1]
-    person_idx = 0
+    people = predicted_data.shape[0]
 
     fig = plt.figure(figsize=(10,6))
     ax = fig.add_subplot(111,projection='3d')
 
-    #Scatter each past frame
-    for time in range(num_past):
-        alpha = 0.1
-        pose = past_data[person_idx,time,:,:]
-        xs,ys,zs = pose[:,0], pose[:,1] , pose[:,2]
-        ax.scatter(xs,zs,ys, c='blue', alpha=alpha, s=10)
-        for p1, p2 in SKELETON_EDGES:
-            x_line = [xs[p1], xs[p2]]
-            y_line = [ys[p1], ys[p2]] # ZED Y -> Plot Z (Up)
-            z_line = [zs[p1], zs[p2]] # ZED Z -> Plot Y (Depth)
-            
-            if time == num_past -1:
-                ax.plot(x_line, z_line, y_line, c='blue', alpha=1, linewidth=1)
-            else:
-                ax.plot(x_line, z_line, y_line, c='blue', alpha=alpha, linewidth=1)
-                         
-    # #Now scatter predictions
-    for time in range(num_predicted):
+    for person_idx in range(people):
+        #Scatter each past frame
+        for time in range(num_past):
             alpha = 0.1
-            pose = predicted_data[person_idx,time,:,:]
+            pose = past_data[person_idx,time,:,:]
+            xs,ys,zs = pose[:,0], pose[:,1] , pose[:,2]
+            ax.scatter(xs,zs,ys, c='blue', alpha=alpha, s=10)
+            for p1, p2 in SKELETON_EDGES:
+                x_line = [xs[p1], xs[p2]]
+                y_line = [ys[p1], ys[p2]] # ZED Y -> Plot Z (Up)
+                z_line = [zs[p1], zs[p2]] # ZED Z -> Plot Y (Depth)
+                
+                if time == num_past -1:
+                    ax.plot(x_line, z_line, y_line, c='blue', alpha=1, linewidth=1)
+                else:
+                    ax.plot(x_line, z_line, y_line, c='blue', alpha=alpha, linewidth=1)
+                            
+        # #Now scatter predictions
+        for time in range(num_predicted):
+                alpha = 0.1
+                pose = predicted_data[person_idx,time,:,:]
+                xs, ys, zs = pose[:, 0], pose[:, 1], pose[:, 2]
+                for p1,p2 in SKELETON_EDGES:
+                    x_line = [xs[p1], xs[p2]]
+                    y_line = [ys[p1], ys[p2]] # ZED Y -> Plot Z (Up)
+                    z_line = [zs[p1], zs[p2]] # ZED Z -> Plot Y (Depth)
+
+                    if time == num_predicted -1:
+                        ax.plot(x_line, z_line, y_line, c='red', alpha=1, linewidth=1)
+                    else:
+                        ax.plot(x_line, z_line, y_line, c='red', alpha=alpha, linewidth=1)
+        
+        for time in range(num_predicted):
+            alpha = 0.1
+            pose = truth_data[person_idx,time,:,:]
             xs, ys, zs = pose[:, 0], pose[:, 1], pose[:, 2]
             for p1,p2 in SKELETON_EDGES:
                 x_line = [xs[p1], xs[p2]]
@@ -190,23 +205,9 @@ if __name__ == "__main__":
                 z_line = [zs[p1], zs[p2]] # ZED Z -> Plot Y (Depth)
 
                 if time == num_predicted -1:
-                    ax.plot(x_line, z_line, y_line, c='red', alpha=1, linewidth=1)
+                    ax.plot(x_line, z_line, y_line, c='green', alpha=1, linewidth=1)
                 else:
-                    ax.plot(x_line, z_line, y_line, c='red', alpha=alpha, linewidth=1)
-    
-    for time in range(num_predicted):
-        alpha = 0.1
-        pose = truth_data[person_idx,time,:,:]
-        xs, ys, zs = pose[:, 0], pose[:, 1], pose[:, 2]
-        for p1,p2 in SKELETON_EDGES:
-            x_line = [xs[p1], xs[p2]]
-            y_line = [ys[p1], ys[p2]] # ZED Y -> Plot Z (Up)
-            z_line = [zs[p1], zs[p2]] # ZED Z -> Plot Y (Depth)
-
-            if time == num_predicted -1:
-                ax.plot(x_line, z_line, y_line, c='green', alpha=1, linewidth=1)
-            else:
-                ax.plot(x_line, z_line, y_line, c='green', alpha=alpha, linewidth=1)
+                    ax.plot(x_line, z_line, y_line, c='green', alpha=alpha, linewidth=1)
 
 
     all_frames = np.concatenate((past_data,predicted_data, truth_data), axis=1)
