@@ -83,7 +83,7 @@ config.motion_mlp.interaction_interval = args.interaction_interval
 config.motion_mlp.hidden_dim = args.hd
 config.snapshot_dir=os.path.join(expr_dir, 'snapshot')
 ensure_dir(config.snapshot_dir)# Create folder
-config.vis_dir=os.path.join(expr_dir, 'multipeople')
+config.vis_dir=os.path.join(expr_dir, 'vis')
 ensure_dir(config.vis_dir)# Create folder
 config.log_file=os.path.join(expr_dir, 'log.txt')
 config.model_pth=args.model_path
@@ -123,11 +123,8 @@ class PersonHistoryManager:
             
             uid = body.id
             current_frame_ids.add(uid)
-
-
             
             #reorder into right index and add into history
-            # zed_to_lsp_indices = [10, 9, 8, 11, 12, 13, 4, 3, 2, 5, 6, 7, 0] 
             # zed_to_lsp_indices = [8,11,9,12,10,13,0,2,5,3,4,6,7] 
             zed_to_lsp_indices = [11, 8, 12, 9, 13, 10, 0, 5, 2, 6, 3, 7, 4]
 
@@ -150,7 +147,13 @@ class PersonHistoryManager:
                 ready_trajectories.append(traj)
                 ready_ids.append(uid)
                 print(f"{uid} is ready for prediction")
-            else:
+            #Check for FPS issues
+            # full_buffer = list(self.buffers[uid])
+            # if len(full_buffer) >= 32:
+            #     downsampled_traj = np.array(full_buffer)[::2]
+            #     ready_trajectories.append(downsampled_traj)
+            #     print(f"{uid} is ready for prediction")
+            # else:
                 pass
 
         return ready_ids, ready_trajectories
@@ -202,45 +205,6 @@ def log_prediction_data(past_poses_np, future_poses_np):
         print(f"Error during log write: {e}")
 
 
-def run_single_inference(latest_16_frames, model, config):
-    # 1. Shape and Flatten (Matches the input preparation in your code)
-    # Input shape: (16, P,  13, 3) -> target flat shape: (1, P, 16, 39)
-    num_people = config.n_p
-
-    # 1. Convert list of T frames to a PyTorch Tensor
-    # input_np shape: (T, P, 13, 3)
-    input_np = np.array(latest_16_frames) 
-    print("input shape", input_np.shape)
-    
-    # Flatten the joint data (13*3=39)
-    # Shape: (T, P, 39)
-    input_flat = input_np.reshape(input_history_length, num_people, config.n_joint * 3)
-
-    #Convert (T, P, D) to model-expected (B=1, P, T, D)
-    # 1. Transpose T and P: (P, T, D)
-    input_transposed = np.transpose(input_flat, (1, 0, 2))
-    
-    # 2. Add Batch dimension (B=1)
-    # Final Shape: (1, P, 16 (T), 39)
-    h36m_motion_input = torch.from_numpy(input_transposed).unsqueeze(0).float().to(device)
-
-    # 3. Apply Transformations for RC (Root centering)
-    if config.rc:
-        h36m_motion_input = Get_RC_Data_Inference(h36m_motion_input)
-
-    with torch.no_grad():
-        # 4. Predict
-        # motion_pred shape: (1, P, 14, 39)
-        motion_pred = predict(model, h36m_motion_input, config)
-
-    # 5. Reshape and Return
-    b, p, n, c = motion_pred.shape
-    # Reshape to (1, P, 14, 13, 3) for visualization/use
-    h36m_motion_input_3d = h36m_motion_input.reshape(b, p, config.t_his, config.n_joint, 3)
-    future_poses_3d = motion_pred.reshape(b, p, n, config.n_joint, 3) #n = T = number of frames pred
-
-    return h36m_motion_input_3d, future_poses_3d
-
 def run_live_inference(zed_body_list, model, config):
     #1. Update hisotry and get list of people with all histories
     valid_ids, valid_trajectories = history_manager.update_and_get_valid_batch(zed_body_list)
@@ -270,16 +234,46 @@ def run_live_inference(zed_body_list, model, config):
     model_input = input_tensor.reshape(b, p, t, j*c) # (Num_Pairs, 2, 16, 39)
     
     # 4. Root Correction (if needed)
+    camera_vel= None
     if config.rc:
-        model_input = Get_RC_Data_Inference(model_input)
+        model_input, camera_vel = Get_RC_Data_Inference(model_input,frame_index)
     
     #5. Do the prediction
     # motion_pred is (Num_Pairs, 2, Future_Frames, 39)
     motion_pred = predict(model,model_input,config)
 
+    #add back the RC velocity
+    if camera_vel is not None:
+        future_frames = motion_pred.shape[2]
+        time_steps = torch.arange(1,future_frames+1, device=config.device).float()
+        #separate the last dim back into xyz and joints to only change xyz
+        mp_b, mp_p, mp_t, mp_d = motion_pred.shape
+        motion_pred_reshaped = motion_pred.reshape(mp_b,mp_p,mp_t,-1,3)
+
+        drift = camera_vel.view(mp_b, 1, 1, 1, 3) * time_steps.view(1, 1, mp_t, 1, 1)
+        # ADD THE DRIFT BACK
+        motion_pred_reshaped += drift
+
+        # Real History Last Frame (Center of mass or Root)
+        real_last_pos = input_tensor[:, :, -1, :, :].mean(dim=2, keepdim=True) # (B, P, 1, 3)
+        
+        # Treadmill History Last Frame (Center of mass or Root)
+        # We have to reshape model_input back to read it
+        treadmill_last_pos = model_input.reshape(b, p, t, j, c)[:, :, -1, :, :].mean(dim=2, keepdim=True)
+        
+        # The positional offset caused by RC
+        rc_pos_offset = real_last_pos.unsqueeze(2) - treadmill_last_pos.unsqueeze(2) # (B, P, 1, 1, 3)
+        
+        # Add the positional offset to the whole prediction
+        motion_pred_reshaped += rc_pos_offset
+
+        # Flatten back to original shape for your existing post-processing
+        motion_pred = motion_pred_reshaped.reshape(mp_b, mp_p, mp_t, mp_d)
+  
+
+
     pred_flat = motion_pred.reshape(-1, motion_pred.shape[2], config.n_joint, 3)
     pred_flat = pred_flat[:num_people]
-
 
     # model_input is (Num_Pairs, 2, 16, 39)
     # 1. Reshape (39) -> (13, 3)
@@ -290,11 +284,8 @@ def run_live_inference(zed_body_list, model, config):
     # Shape becomes: (Num_Pairs*2, 16, 13, 3)
     input_flat = input_reshaped.view(-1, config.t_his, config.n_joint, 3)
     
-    # 3. Remove Ghost padding (Same as you did for pred_flat)
     # Shape becomes: (Total_People, 16, 13, 3)
     input_flat = input_flat[:num_people]
-
-
 
     #6. return the results into each uid
     results = {}
@@ -304,51 +295,55 @@ def run_live_inference(zed_body_list, model, config):
     return input_flat, pred_flat
 
 
-
-
-
-
-
 # 1. Root Correction (RC) Function for Inference
-def Get_RC_Data_Inference(motion_input):
+def Get_RC_Data_Inference(motion_input,frame_index):
     """
     Applies Root Correction (RC) and velocity integration to a single sequence.
     This replaces the original Get_RC_Data which required both input and target.
     
     motion_input shape: (B, P, T, JK) -> (1, 1, 16, 39)
+    camera_vel: The removed global velocity vector (B, 3)
     """
     b, p, t, jk = motion_input.shape
     k = 3
     j = jk // k
     
-    # 1. Reshape and calculate velocity
-    motion = motion_input.reshape(b, p, t, j, k) # B, P, T, J, K
+    # 1. Reshape
+    motion = motion_input.reshape(b, p, t, j, k)
     
-    # Calculate velocity: Vel_t = Pos_t+1 - Pos_t
+    # 2. Velocity Calculation
     vel_data = torch.zeros((b, p, t, j, k)).to(motion.device) 
     vel_data[:, :, :-1, :, :] = motion[:, :, 1:, :, :] - motion[:, :, :-1, :, :]
     
-    data = torch.cat((motion, vel_data), dim=-1) # B, P, T, J, 6 (Pos + Vel)
-    data = data.transpose(1, 2) # B, T, P, J, 6
+    data = torch.cat((motion, vel_data), dim=-1)
     
-    # 2. Global Translation Correction
-    # Estimate global movement from average velocity of all joints/people
-    # Only use the non-zero velocity data (1:t)
-    camera_vel = data[:, :t-1, :, :, 3:].mean(dim=(2,3)) # B, 3
-    camera_vel_broadcast = camera_vel.unsqueeze(2).unsqueeze(2)
+    # Transpose to (B, T, P, J, 6)
+    data = data.transpose(1, 2) 
     
-    # Subtract camera velocity from ALL velocity vectors
+    # 3. Calculate Global Velocity (The "Drift")
+    # Average over Time(1), Person(2), and Joint(3) to get (B, 3)
+    # Note: We use t-1 because velocity is 0 for the last frame in the way we calculated it
+
+    #Trying to average JUST HIP
+    # camera_vel = data[:, :t-1, :, :, 3:].mean(dim=(1, 2, 3)) 
+    camera_vel = data[:, :t-1, :, 0, 3:].mean(dim=(1, 2)) # Shape (B, 3)
+    
+    # 4. Remove Drift
+    # FORCE the shape for broadcasting: (Batch, Time=1, Person=1, Joint=1, Coords=3)
+    # This aligns perfectly with data shape (B, T, P, J, 3)
+    camera_vel_broadcast = camera_vel.view(b, 1, 1, 1, 3)
+    
+    # Subtract from all frames
     data[:, 1:, ..., 3:] -= camera_vel_broadcast
     
-    # 3. Velocity-to-Position Reconversion (Integration)
-    # Corrected Pos = Starting Pos + Cumulative Sum of Corrected Velocities
+    # 5. Integrate back to positions (Treadmill positions)
     data[..., :3] = data[:, 0:1, ..., :3] + data[..., 3:].cumsum(dim=1)
     
-    # 4. Reshape and return corrected positions
+    # 6. Reshape back to original format
     data = data.transpose(1, 2)[..., :3].reshape(b, p, t, jk) 
+    print(f"velocity for frame{frame_index} IS {camera_vel}")
     
-    return data
-
+    return data, camera_vel
 # 2. Checkpoint Loading Utility
 def load_checkpoint(model, model_path, device):
     try:
@@ -436,18 +431,19 @@ frame_counter = 0
 history_manager = PersonHistoryManager(history_length=input_history_length)
 
 # --- Define Logging Path ---
-POSE_LOG_FILE = os.path.join(expr_dir, 'pose_log2.jsonl')
+POSE_LOG_FILE = os.path.join(expr_dir, 'pose_log3.jsonl')
 print(f"Prediction log will be saved to: {POSE_LOG_FILE}")
 
 
 # --- Load the Json file ---
-with open('multbodies.json','r') as file:
+with open('15fps_1.json','r') as file:
     data = json.load(file)
 
 processed_frames_store = []
 ordered_timestamps = list(data.keys())
 print(f"Loaded {len(ordered_timestamps)} frames.")
 
+#Loading the data into a format readable by code
 for timestamp_key in ordered_timestamps:
     frame_data=data[timestamp_key]
 
@@ -486,11 +482,11 @@ for frame_index, frame_bodies in enumerate(processed_frames_store):
     # output_joints: (N, 14, 13, 3)
     # Result: (N, 30, 13, 3)
     motion=torch.cat([input_joints,output_joints],dim=1).cpu().detach().numpy()
+ 
 
-
-    if frame_index >= config.t_his:
+    if frame_index % 10 ==0:
         motion_5d = motion[np.newaxis, ...]
-        visuaulize(motion_5d,"trial",config.vis_dir,input_len=15,dataset='mupots')
+        visuaulize(motion_5d,f"iter:{frame_index}",config.vis_dir,input_len=15,dataset='mupots')
 
     # Convert tensors to NumPy arrays for logging
     past_poses_np = input_joints.cpu().detach().numpy()
