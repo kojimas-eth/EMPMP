@@ -1,10 +1,16 @@
 import json
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.lines import Line2D
+from mpl_toolkits.mplot3d import Axes3D 
 
 # --- CONFIGURATION ---
-LOG_FILE = 'exprs/online_inference/pose_log2.jsonl'
+# LOG_FILE = 'exprs/online_inference/pose_log2.jsonl'
+LOG_FILE = 'exprs/15fps/pose_log.jsonl'
+# LOG_FILE = 'exprs/3dpw_single/pose_log.jsonl'
+GAP_THRESHOLD = 0.9  # seconds
+
+
 # MuPoTS 13-joint connections (Indices match your 13-joint array)
 # 0:Pelvis, 1:RHip, 2:LHip, 3:RKnee, 4:LKnee, 5:RAnk, 6:LAnk, 
 # 7:Spine, 8:Neck, 9:RSho, 10:LSho, 11:RElb, 12:LElb
@@ -79,9 +85,47 @@ def set_consistent_axes(ax, all_data_np):
     # This prevents the person from looking stretched
     ax.set_box_aspect([1, 1, 1])
 
+
+def compute_mpjpe(predicted, ground_truth):
+    """
+    predicted: numpy array of shape (Num_Frames, 13, 3)
+    ground_truth: numpy array of shape (Num_Frames, 13, 3)
+    Calculates the error of joints at specific indices only.
+    """
+    # print(f"predicted shape: {predicted.shape}, ground_truth shape: {ground_truth.shape}")
+    assert predicted.shape == ground_truth.shape, "Shape mismatch between predicted and ground truth"
+    
+    # Compute Euclidean distances per joint per frame
+    diffs = predicted - ground_truth
+    dists = np.linalg.norm(diffs, axis=-1)  # Shape: (Num_Frames, 13)
+    
+    # Average over all joints and frames
+    mpjpe = np.mean(dists)
+    return mpjpe
+
+def compute_avg_mpjpe(predicted_data, ground_truth_data):
+    """
+    predicted_data: numpy array of shape (Num_People, Num_Frames, 13, 3)
+    ground_truth_data: numpy array of shape (Num_People, Num_Frames, 13, 3)
+    Computes average MPJPE across all people.
+    """
+    num_people = predicted_data.shape[0]
+    total_mpjpe = 0.0
+    
+    for person_idx in range(num_people):
+        pred = predicted_data[person_idx]
+        gt = ground_truth_data[person_idx]
+        mpjpe = compute_mpjpe(pred, gt)
+        total_mpjpe += mpjpe
+    
+    avg_mpjpe = total_mpjpe / num_people
+    return avg_mpjpe
+
+
 # --- MAIN ---
 if __name__ == "__main__":
     data = load_log_data(LOG_FILE)
+    # raw_data = load_log_data(RAW_DATA)
     print(f"Loaded {len(data)} log entries.")
     
     ##For Debugging plot just single frame
@@ -137,15 +181,27 @@ if __name__ == "__main__":
 
 
     #choose instance to study
-    frame = 26
+    print(len(data))
+    for i in range(len(data)-1):
+        time_diff = data[i+1]['timestamp'] - data[i]['timestamp']
+        if time_diff > GAP_THRESHOLD:
+            print(f"Large gap of {time_diff:.2f}s between frames {i} and {i+1}")
+    #Find the intervals of data that are continuous 
+    frame = 19
+    future = 14
+
     current_data =data[frame]
-    future_data = data[frame + 10]
+    future_data = data[frame+future]
+    highlight_pred = 0 #frame to study
+    error_frames=[0,4,13] #frames to compute error on
 
     past_data= np.array(current_data["input_frames"])
     predicted_data = np.array(current_data["prediction_frames"])
     truth_data = np.array(future_data["input_frames"])
 
-    print(f"past_data = {past_data.shape}")
+    print(f"past = {past_data[0][future][0]}")
+    print(f"truth = {truth_data[0][0][0]}")
+    # print(f"past_data = {past_data.shape}")
 
     #reshape into correct format (to handle 1 person case)
     if predicted_data.ndim ==3:
@@ -160,9 +216,10 @@ if __name__ == "__main__":
     num_predicted = predicted_data.shape[1]
     people = predicted_data.shape[0]
 
-    fig = plt.figure(figsize=(10,6))
+    fig = plt.figure(figsize=(14,8))
     ax = fig.add_subplot(111,projection='3d')
 
+    error_summary = []
     for person_idx in range(people):
         #Scatter each past frame
         for time in range(num_past):
@@ -175,14 +232,14 @@ if __name__ == "__main__":
                 y_line = [ys[p1], ys[p2]] # ZED Y -> Plot Z (Up)
                 z_line = [zs[p1], zs[p2]] # ZED Z -> Plot Y (Depth)
                 
-                if time == num_past -1:
+                if time == future:
                     ax.plot(x_line, z_line, y_line, c='blue', alpha=1, linewidth=1)
                 else:
                     ax.plot(x_line, z_line, y_line, c='blue', alpha=alpha, linewidth=1)
                             
         # #Now scatter predictions
         for time in range(num_predicted):
-                alpha = 0.1
+                alpha = 0.10
                 pose = predicted_data[person_idx,time,:,:]
                 xs, ys, zs = pose[:, 0], pose[:, 1], pose[:, 2]
                 for p1,p2 in SKELETON_EDGES:
@@ -190,13 +247,14 @@ if __name__ == "__main__":
                     y_line = [ys[p1], ys[p2]] # ZED Y -> Plot Z (Up)
                     z_line = [zs[p1], zs[p2]] # ZED Z -> Plot Y (Depth)
 
-                    if time == num_predicted -1:
+                    if time == highlight_pred:
                         ax.plot(x_line, z_line, y_line, c='red', alpha=1, linewidth=1)
                     else:
                         ax.plot(x_line, z_line, y_line, c='red', alpha=alpha, linewidth=1)
-        
+
+        #Scatter the true future frames
         for time in range(num_predicted):
-            alpha = 0.1
+            alpha = 0.10
             pose = truth_data[person_idx,time,:,:]
             xs, ys, zs = pose[:, 0], pose[:, 1], pose[:, 2]
             for p1,p2 in SKELETON_EDGES:
@@ -204,11 +262,27 @@ if __name__ == "__main__":
                 y_line = [ys[p1], ys[p2]] # ZED Y -> Plot Z (Up)
                 z_line = [zs[p1], zs[p2]] # ZED Z -> Plot Y (Depth)
 
-                if time == num_predicted -1:
+                if time == highlight_pred:
                     ax.plot(x_line, z_line, y_line, c='green', alpha=1, linewidth=1)
                 else:
                     ax.plot(x_line, z_line, y_line, c='green', alpha=alpha, linewidth=1)
+        
+        #compute error
 
+        for err_frame in error_frames:
+            mpjpe = compute_mpjpe(predicted_data[person_idx, err_frame], truth_data[person_idx, err_frame])
+            error_summary.append(f"P: {person_idx} T+{err_frame+1}: {mpjpe:.3f}m")
+
+    # Join into one string
+    info_text = f"Prediction Errors (MPJPE):\n" + "\n".join(error_summary)
+    # Place text in 2D coordinates (0,0 is bottom-left, 1,1 is top-right)
+    # transform=ax.transAxes makes it relative to the axes box
+    # ax.text2D(0.00, 0.2, info_text, transform=ax.transAxes, 
+    #           color='black', bbox=dict(facecolor='white', alpha=0.7))
+    fig.text(0.75, 0.60, info_text, 
+             fontsize=10, 
+             verticalalignment='top',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
 
     all_frames = np.concatenate((past_data,predicted_data, truth_data), axis=1)
     set_consistent_axes(ax,all_frames)
@@ -216,8 +290,15 @@ if __name__ == "__main__":
     ax.set_xlabel('X (Lateral)')
     ax.set_ylabel('Z (Depth)')
     ax.set_zlabel('Y (Height)')
-    ax.set_title(f'Trajectory: {num_past} Past Frames + {num_predicted} Predicted Frames')
-    ax.legend()
+    ax.set_title(f'Studying frame {frame} {num_past} Past Frames + {num_predicted} Predicted Frames with prediction #{highlight_pred} Highlighted')
+    legend_elements = [
+    Line2D([0], [0], color='blue', lw=2, label='Past Frame (History)'),
+    Line2D([0], [0], color='green', lw=2, label='Ground Truth (Real)'),
+    Line2D([0], [0], color='red', lw=2, label='Prediction (Model)')
+    ]
+
+    # Add the legend to the plot
+    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.05, 0.8), borderaxespad=0.)
 
     plt.show()
 
